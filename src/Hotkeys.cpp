@@ -37,9 +37,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam)
         }
 
         if (keyUp && (info->vkCode == 'W' || info->vkCode == VK_LWIN || info->vkCode == VK_RWIN || info->vkCode == VK_SHIFT || info->vkCode == VK_LSHIFT || info->vkCode == VK_RSHIFT)) {
-            if (!isWinShiftW('W')) {
-                g_comboDown = false;
-            }
+            g_comboDown = false;
         }
     }
 
