@@ -2,16 +2,20 @@
 
 A reading light for your screen. Dims everything except the line you're on — a digital version of the classic index-card-under-the-line reading technique.
 
+**Platform support:** Windows 10+ (current). macOS support is planned.
+
 ## Install
 
-Download the latest **IndexCard-x.x-Setup.exe** from [Releases](https://github.com/dciula/reader/releases) and run it. No admin rights required.
+Download the latest **IndexCard-1.0-Setup.exe** from [Releases](https://github.com/djcdevelopment/indexcard/releases) and run it. No admin rights required.
 
 Or download the bare **IndexCard.exe** and double-click — no installer, no dependencies.
+
+> **Windows security prompt:** Because IndexCard is not yet code-signed, Windows SmartScreen will block it on first run. Click **More info → Run anyway** to proceed. This is expected until a signing certificate is in place.
 
 ## Use
 
 - `Win+Shift+W` — toggle the overlay on/off. First press opens a selection screen: drag to draw your reading strip.
-- Click the **dimmed overlay area** to enter follow mode (overlay tracks your cursor). Click again to stop.
+- Click the **dimmed overlay area** to enter follow mode (strip tracks your cursor vertically as you read). Click again to exit follow mode.
 - Bottom-right pill:
   - `□` — redraw / resize the strip
   - `✕` — hide the overlay
@@ -30,7 +34,7 @@ Edit `%APPDATA%\IndexCard\settings.json` to adjust colors, margins, opacity, and
 | `marginBottom` | 160 | Space below (room for the pill toolbar) |
 | `marginLeft` | 75 | Space left of the strip |
 | `marginRight` | 75 | Space right of the strip |
-| `opacity` | 0.90 | Dimming strength (0.15–1.0) |
+| `opacity` | 0.90 | How opaque the dim overlay is (0.15–1.0); higher = more dimmed |
 | `borderWidth` | 2 | Strip border thickness in pixels (1–8) |
 
 ---
@@ -48,6 +52,7 @@ cmake --build build --config Release
 **Build the installer** (requires [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
 ```powershell
+# Adjust the path to match your Inno Setup 6 installation
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\indexcard.iss
 # output: dist\IndexCard-1.0-Setup.exe
 ```
