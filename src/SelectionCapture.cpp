@@ -1,5 +1,6 @@
 #include "SelectionCapture.h"
 #include "Logger.h"
+#include "Theme.h"
 
 #include <algorithm>
 #include <cstring>
@@ -11,7 +12,7 @@
 
 namespace {
 
-const wchar_t* CaptureClassName = L"FocusStripSelectionCapture";
+const wchar_t* CaptureClassName = L"IndexCardSelectionCapture";
 constexpr int ToolbarWidth = 360;
 constexpr int ToolbarHeight = 48;
 constexpr int ToolbarTop = 18;
@@ -93,6 +94,65 @@ void registerCaptureClass(HINSTANCE instance)
 
 } // namespace
 
+void SelectionCapture::rebuildDib(int w, int h)
+{
+    releaseDib();
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth       = w;
+    bmi.bmiHeader.biHeight      = -h;
+    bmi.bmiHeader.biPlanes      = 1;
+    bmi.bmiHeader.biBitCount    = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    HDC screen = GetDC(nullptr);
+    dibDC_     = CreateCompatibleDC(screen);
+    dibBitmap_ = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &dibBits_, nullptr, 0);
+    ReleaseDC(nullptr, screen);
+
+    if (!dibDC_ || !dibBitmap_ || !dibBits_) {
+        if (dibBitmap_) { DeleteObject(dibBitmap_); dibBitmap_ = nullptr; }
+        if (dibDC_)     { DeleteDC(dibDC_);         dibDC_     = nullptr; }
+        dibBits_ = nullptr;
+        Log::write(L"SelectionCapture rebuildDib: CreateDIBSection failed");
+        return;
+    }
+
+    SelectObject(dibDC_, dibBitmap_);
+    SetBkMode(dibDC_, TRANSPARENT);
+    pixelBuf_.assign(static_cast<size_t>(w) * h, 0u);
+
+    toolbarFillBrush_     = CreateSolidBrush(RGB(252, 252, 252));
+    toolbarSelectedBrush_ = CreateSolidBrush(RGB(232, 244, 255));
+    toolbarOutlinePen_    = CreatePen(PS_SOLID, 1, RGB(205, 205, 205));
+    toolbarTitleFont_     = CreateFontW(-14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    toolbarSmallFont_     = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    selectionBorderPen_   = CreatePen(PS_DASH, 1, RGB(255, 255, 255));
+}
+
+void SelectionCapture::releaseDib()
+{
+    if (dibDC_) { DeleteDC(dibDC_); dibDC_ = nullptr; }
+    if (dibBitmap_) { DeleteObject(dibBitmap_); dibBitmap_ = nullptr; }
+    dibBits_ = nullptr;
+    pixelBuf_.clear();
+
+    if (toolbarFillBrush_)     { DeleteObject(toolbarFillBrush_);     toolbarFillBrush_     = nullptr; }
+    if (toolbarSelectedBrush_) { DeleteObject(toolbarSelectedBrush_); toolbarSelectedBrush_ = nullptr; }
+    if (toolbarOutlinePen_)    { DeleteObject(toolbarOutlinePen_);    toolbarOutlinePen_    = nullptr; }
+    if (toolbarTitleFont_)     { DeleteObject(toolbarTitleFont_);     toolbarTitleFont_     = nullptr; }
+    if (toolbarSmallFont_)     { DeleteObject(toolbarSmallFont_);     toolbarSmallFont_     = nullptr; }
+    if (selectionBorderPen_)   { DeleteObject(selectionBorderPen_);   selectionBorderPen_   = nullptr; }
+}
+
 SelectionCapture::~SelectionCapture()
 {
     cancel();
@@ -119,7 +179,7 @@ bool SelectionCapture::begin(HINSTANCE instance, CompleteCallback complete, Canc
     hwnd_ = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW,
         CaptureClassName,
-        L"Focus Strip Selection Capture",
+        L"IndexCard",
         WS_POPUP,
         vs.left,
         vs.top,
@@ -140,6 +200,7 @@ bool SelectionCapture::begin(HINSTANCE instance, CompleteCallback complete, Canc
     std::wostringstream createdLine;
     createdLine << L"SelectionCapture hwnd=0x" << std::hex << reinterpret_cast<uintptr_t>(hwnd_);
     Log::write(createdLine.str());
+    rebuildDib(vs.right - vs.left, vs.bottom - vs.top);
     render();
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
@@ -163,6 +224,7 @@ void SelectionCapture::cancel()
     hwnd_ = nullptr;
     ReleaseCapture();
     DestroyWindow(old);
+    releaseDib();
     Log::write(L"SelectionCapture cancel");
     if (cancel_) {
         cancel_();
@@ -221,6 +283,7 @@ LRESULT SelectionCapture::handleMessage(UINT message, WPARAM wParam, LPARAM lPar
         hwnd_ = nullptr;
         ReleaseCapture();
         DestroyWindow(old);
+        releaseDib();
 
         if ((selection.right - selection.left) >= 10 && (selection.bottom - selection.top) >= 5) {
             if (complete_) {
@@ -247,9 +310,7 @@ LRESULT SelectionCapture::handleMessage(UINT message, WPARAM wParam, LPARAM lPar
         return 0;
 
     case WM_DESTROY:
-        if (hwnd_ == hwnd_) {
-            hwnd_ = nullptr;
-        }
+        hwnd_ = nullptr;
         return 0;
     }
 
@@ -258,143 +319,105 @@ LRESULT SelectionCapture::handleMessage(UINT message, WPARAM wParam, LPARAM lPar
 
 void SelectionCapture::render()
 {
-    if (!hwnd_) {
+    if (!hwnd_ || !dibBits_) {
         return;
     }
 
     RECT client = {};
     GetClientRect(hwnd_, &client);
-    const int width = widthOf(client);
-    const int height = heightOf(client);
-    if (width <= 0 || height <= 0) {
+    const int w = widthOf(client);
+    const int h = heightOf(client);
+    if (w <= 0 || h <= 0) {
         Log::write(L"SelectionCapture render skipped: empty client");
         return;
     }
+    const int stride = w;
 
-    std::vector<unsigned int> pixels(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
-    fillRectArgb(pixels, width, client, 86, 0, 0, 0);
+    // Clear and fill pixel buffer (no alloc — reuse)
+    std::fill(pixelBuf_.begin(), pixelBuf_.end(), 0u);
+    fillRectArgb(pixelBuf_, stride, client, 86, 0, 0, 0);
 
     RECT rect = normalizedSelection();
     if (drawing_ && widthOf(rect) > 0 && heightOf(rect) > 0) {
-        clearRect(pixels, width, rect);
+        clearRect(pixelBuf_, stride, rect);
     }
 
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
+    // Copy into cached DIB (no CreateDIBSection per frame)
+    memcpy(dibBits_, pixelBuf_.data(), pixelBuf_.size() * sizeof(unsigned int));
 
-    void* bits = nullptr;
-    HDC screen = GetDC(nullptr);
-    HDC memory = CreateCompatibleDC(screen);
-    HBITMAP bitmap = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!bitmap || !bits) {
-        std::wostringstream line;
-        line << L"SelectionCapture CreateDIBSection failed bitmap=" << bitmap << L" bits=" << bits << L" lastError=" << GetLastError();
-        Log::write(line.str());
-        if (bitmap) {
-            DeleteObject(bitmap);
-        }
-        DeleteDC(memory);
-        ReleaseDC(nullptr, screen);
-        return;
-    }
-
-    memcpy(bits, pixels.data(), pixels.size() * sizeof(unsigned int));
-    HBITMAP oldBitmap = reinterpret_cast<HBITMAP>(SelectObject(memory, bitmap));
-
-    drawToolbar(memory, width);
+    drawToolbar(dibDC_, w);
 
     if (drawing_ && widthOf(rect) > 0 && heightOf(rect) > 0) {
-        HPEN border = CreatePen(PS_DASH, 1, RGB(255, 255, 255));
-        HPEN oldPen = reinterpret_cast<HPEN>(SelectObject(memory, border));
-        HBRUSH oldBrush = reinterpret_cast<HBRUSH>(SelectObject(memory, GetStockObject(NULL_BRUSH)));
-        Rectangle(memory, rect.left, rect.top, rect.right, rect.bottom);
-        SelectObject(memory, oldBrush);
-        SelectObject(memory, oldPen);
-        DeleteObject(border);
+        HPEN oldPen   = reinterpret_cast<HPEN>(SelectObject(dibDC_, selectionBorderPen_));
+        HBRUSH oldBrush = reinterpret_cast<HBRUSH>(SelectObject(dibDC_, GetStockObject(NULL_BRUSH)));
+        Rectangle(dibDC_, rect.left, rect.top, rect.right, rect.bottom);
+        SelectObject(dibDC_, oldBrush);
+        SelectObject(dibDC_, oldPen);
 
         RECT borderBand = rect;
         InflateRect(&borderBand, 3, 3);
-        borderBand.left = std::max<LONG>(0, borderBand.left);
-        borderBand.top = std::max<LONG>(0, borderBand.top);
-        borderBand.right = std::min<LONG>(width, borderBand.right);
-        borderBand.bottom = std::min<LONG>(height, borderBand.bottom);
+        borderBand.left   = std::max<LONG>(0, borderBand.left);
+        borderBand.top    = std::max<LONG>(0, borderBand.top);
+        borderBand.right  = std::min<LONG>(w, borderBand.right);
+        borderBand.bottom = std::min<LONG>(h, borderBand.bottom);
 
-        RECT top = { borderBand.left, borderBand.top, borderBand.right, std::min<LONG>(borderBand.top + 7, borderBand.bottom) };
-        RECT bottom = { borderBand.left, std::max<LONG>(borderBand.bottom - 7, borderBand.top), borderBand.right, borderBand.bottom };
-        RECT left = { borderBand.left, borderBand.top, std::min<LONG>(borderBand.left + 7, borderBand.right), borderBand.bottom };
-        RECT right = { std::max<LONG>(borderBand.right - 7, borderBand.left), borderBand.top, borderBand.right, borderBand.bottom };
-        normalizeDibAlpha(bits, width, top, 255);
-        normalizeDibAlpha(bits, width, bottom, 255);
-        normalizeDibAlpha(bits, width, left, 255);
-        normalizeDibAlpha(bits, width, right, 255);
+        RECT top    = {borderBand.left, borderBand.top, borderBand.right, std::min<LONG>(borderBand.top + 7, borderBand.bottom)};
+        RECT bottom = {borderBand.left, std::max<LONG>(borderBand.bottom - 7, borderBand.top), borderBand.right, borderBand.bottom};
+        RECT left   = {borderBand.left, borderBand.top, std::min<LONG>(borderBand.left + 7, borderBand.right), borderBand.bottom};
+        RECT right  = {std::max<LONG>(borderBand.right - 7, borderBand.left), borderBand.top, borderBand.right, borderBand.bottom};
+        normalizeDibAlpha(dibBits_, stride, top,    255);
+        normalizeDibAlpha(dibBits_, stride, bottom, 255);
+        normalizeDibAlpha(dibBits_, stride, left,   255);
+        normalizeDibAlpha(dibBits_, stride, right,  255);
     }
 
-    RECT toolbar = { (width - ToolbarWidth) / 2, ToolbarTop, (width + ToolbarWidth) / 2, ToolbarTop + ToolbarHeight };
-    normalizeDibAlpha(bits, width, toolbar, 246);
+    RECT toolbar = {(w - ToolbarWidth) / 2, ToolbarTop, (w + ToolbarWidth) / 2, ToolbarTop + ToolbarHeight};
+    normalizeDibAlpha(dibBits_, stride, toolbar, 246);
 
-    POINT src = { 0, 0 };
-    RECT vs = virtualScreen();
-    POINT dst = { vs.left, vs.top };
-    SIZE size = { width, height };
+    POINT src = {0, 0};
+    RECT vs   = virtualScreen();
+    POINT dst = {vs.left, vs.top};
+    SIZE size = {w, h};
     BLENDFUNCTION blend = {};
-    blend.BlendOp = AC_SRC_OVER;
+    blend.BlendOp             = AC_SRC_OVER;
     blend.SourceConstantAlpha = 255;
-    blend.AlphaFormat = AC_SRC_ALPHA;
-    const BOOL updated = UpdateLayeredWindow(hwnd_, screen, &dst, &size, memory, &src, 0, &blend, ULW_ALPHA);
+    blend.AlphaFormat         = AC_SRC_ALPHA;
+    HDC screen = GetDC(nullptr);
+    const BOOL updated = UpdateLayeredWindow(hwnd_, screen, &dst, &size, dibDC_, &src, 0, &blend, ULW_ALPHA);
+    ReleaseDC(nullptr, screen);
     if (!updated) {
         std::wostringstream line;
         line << L"SelectionCapture UpdateLayeredWindow failed lastError=" << GetLastError()
-             << L" size=" << width << L"x" << height;
+             << L" size=" << w << L"x" << h;
         Log::write(line.str());
     }
-
-    SelectObject(memory, oldBitmap);
-    DeleteObject(bitmap);
-    DeleteDC(memory);
-    ReleaseDC(nullptr, screen);
 }
 
 void SelectionCapture::drawToolbar(HDC dc, int width)
 {
-    RECT toolbar = { (width - ToolbarWidth) / 2, ToolbarTop, (width + ToolbarWidth) / 2, ToolbarTop + ToolbarHeight };
+    RECT toolbar = {(width - ToolbarWidth) / 2, ToolbarTop, (width + ToolbarWidth) / 2, ToolbarTop + ToolbarHeight};
 
-    HBRUSH fill = CreateSolidBrush(RGB(252, 252, 252));
-    HBRUSH oldBrush = reinterpret_cast<HBRUSH>(SelectObject(dc, fill));
-    HPEN outline = CreatePen(PS_SOLID, 1, RGB(205, 205, 205));
-    HPEN oldPen = reinterpret_cast<HPEN>(SelectObject(dc, outline));
+    HBRUSH oldBrush = reinterpret_cast<HBRUSH>(SelectObject(dc, toolbarFillBrush_));
+    HPEN   oldPen   = reinterpret_cast<HPEN>(SelectObject(dc, toolbarOutlinePen_));
     RoundRect(dc, toolbar.left, toolbar.top, toolbar.right, toolbar.bottom, 8, 8);
 
-    RECT icon = { toolbar.left + 16, toolbar.top + 12, toolbar.left + 40, toolbar.top + 36 };
-    HBRUSH selected = CreateSolidBrush(RGB(232, 244, 255));
-    FillRect(dc, &icon, selected);
+    RECT icon = {toolbar.left + 16, toolbar.top + 12, toolbar.left + 40, toolbar.top + 36};
+    FillRect(dc, &icon, toolbarSelectedBrush_);
     Rectangle(dc, icon.left, icon.top, icon.right, icon.bottom);
 
-    RECT label = { toolbar.left + 52, toolbar.top + 7, toolbar.right - 16, toolbar.top + 28 };
-    RECT help = { toolbar.left + 52, toolbar.top + 27, toolbar.right - 16, toolbar.bottom - 7 };
+    RECT label = {toolbar.left + 52, toolbar.top +  7, toolbar.right - 16, toolbar.top + 28};
+    RECT help  = {toolbar.left + 52, toolbar.top + 27, toolbar.right - 16, toolbar.bottom - 7};
 
-    HFONT titleFont = CreateFontW(-14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-    HFONT smallFont = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-    HFONT oldFont = reinterpret_cast<HFONT>(SelectObject(dc, titleFont));
-    SetBkMode(dc, TRANSPARENT);
+    HFONT oldFont = reinterpret_cast<HFONT>(SelectObject(dc, toolbarTitleFont_));
     SetTextColor(dc, RGB(35, 35, 35));
     DrawTextW(dc, L"Draw reading selection", -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    SelectObject(dc, smallFont);
+    SelectObject(dc, toolbarSmallFont_);
     SetTextColor(dc, RGB(95, 95, 95));
     DrawTextW(dc, L"Drag a line or block. Esc cancels.", -1, &help, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     SelectObject(dc, oldFont);
     SelectObject(dc, oldBrush);
     SelectObject(dc, oldPen);
-    DeleteObject(titleFont);
-    DeleteObject(smallFont);
-    DeleteObject(fill);
-    DeleteObject(selected);
-    DeleteObject(outline);
 }
 
 RECT SelectionCapture::virtualScreen() const

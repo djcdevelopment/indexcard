@@ -17,7 +17,7 @@ bool TrayIcon::create(HWND hwnd, HINSTANCE instance)
     nid_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid_.uCallbackMessage = TrayMessage;
     nid_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(nid_.szTip, L"Focus Strip");
+    wcscpy_s(nid_.szTip, L"IndexCard");
 
     added_ = Shell_NotifyIconW(NIM_ADD, &nid_) != FALSE;
     if (added_) {
@@ -43,7 +43,7 @@ void TrayIcon::setVisibleState(bool visible)
         return;
     }
     nid_.uFlags = NIF_TIP;
-    wcscpy_s(nid_.szTip, visible ? L"Focus Strip - visible" : L"Focus Strip - hidden");
+    wcscpy_s(nid_.szTip, visible ? L"IndexCard - visible" : L"IndexCard - hidden");
     Shell_NotifyIconW(NIM_MODIFY, &nid_);
 }
 

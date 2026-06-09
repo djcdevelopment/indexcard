@@ -12,11 +12,12 @@
 
 namespace {
 
-const wchar_t* AppWindowClassName = L"FocusStripAppWindow";
+const wchar_t* AppWindowClassName = L"IndexCardAppWindow";
 
 struct AppState {
     HINSTANCE instance = nullptr;
     HWND hwnd = nullptr;
+    HANDLE instanceMutex = nullptr;
     SettingsStore store;
     Settings settings;
     OverlayWindow overlay;
@@ -24,7 +25,6 @@ struct AppState {
     TrayIcon tray;
     Hotkeys hotkeys;
     SplashWindow splash;
-    bool firstHotkeyShouldCapture = false;
 };
 
 std::unique_ptr<AppState> g_app;
@@ -51,7 +51,7 @@ void beginCapture()
         g_app->instance,
         [](const RECT& selection) {
             Log::write(L"beginCapture complete callback");
-            g_app->firstHotkeyShouldCapture = false;
+            g_app->settings.selectionConfigured = true;
             g_app->overlay.applySelectionRect(selection);
             saveAndUpdateTray(g_app->overlay.settings());
         },
@@ -70,10 +70,19 @@ void handleToggleHotkey()
         return;
     }
     std::wostringstream line;
-    line << L"handleHotkey begin capture firstCapture=" << g_app->firstHotkeyShouldCapture
-         << L" overlayVisible=" << g_app->overlay.visible();
+    line << L"handleToggleHotkey overlayVisible=" << g_app->overlay.visible()
+         << L" selectionConfigured=" << g_app->settings.selectionConfigured;
     Log::write(line.str());
-    beginCapture();
+    if (!g_app->settings.selectionConfigured) {
+        beginCapture();
+        return;
+    }
+    if (g_app->overlay.visible()) {
+        g_app->overlay.hide();
+    } else {
+        g_app->overlay.show();
+    }
+    saveAndUpdateTray(g_app->overlay.settings());
 }
 
 void resetDefaults()
@@ -85,22 +94,21 @@ void resetDefaults()
     reset.visible = g_app->overlay.visible();
     reset.loadedFromDisk = true;
     reset.selectionConfigured = false;
-    g_app->firstHotkeyShouldCapture = true;
+    g_app->settings.selectionConfigured = false;
     g_app->overlay.reset(reset);
     saveAndUpdateTray(g_app->overlay.settings());
 }
 
 void setDpiAwareness()
 {
-    HMODULE user32 = LoadLibraryW(L"user32.dll");
+    // user32.dll is guaranteed loaded in every Win32 process — use GetModuleHandle, not LoadLibrary
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (user32) {
         using SetDpiAwarenessContextFn = BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT);
         auto setContext = reinterpret_cast<SetDpiAwarenessContextFn>(GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
         if (setContext && setContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
-            FreeLibrary(user32);
             return;
         }
-        FreeLibrary(user32);
     }
     SetProcessDPIAware();
 }
@@ -161,6 +169,10 @@ LRESULT CALLBACK AppWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             g_app->hotkeys.unregisterAll();
             g_app->tray.destroy();
             g_app->overlay.destroy();
+            if (g_app->instanceMutex) {
+                CloseHandle(g_app->instanceMutex);
+                g_app->instanceMutex = nullptr;
+            }
         }
         PostQuitMessage(0);
         return 0;
@@ -183,16 +195,22 @@ bool registerAppClass(HINSTANCE instance)
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
 {
+    HANDLE instanceMutex = CreateMutexW(nullptr, TRUE, L"IndexCard_SingleInstance");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(instanceMutex);
+        return 0;
+    }
+
     Log::init();
     Log::write(L"App startup");
     setDpiAwareness();
 
     g_app = std::make_unique<AppState>();
+    g_app->instanceMutex = instanceMutex;
     g_app->instance = instance;
     g_app->settings = g_app->store.load();
-    g_app->firstHotkeyShouldCapture = !g_app->settings.selectionConfigured;
     std::wostringstream initialLine;
-    initialLine << L"Initial state firstHotkeyShouldCapture=" << g_app->firstHotkeyShouldCapture;
+    initialLine << L"Initial state selectionConfigured=" << g_app->settings.selectionConfigured;
     Log::write(initialLine.str());
 
     if (!registerAppClass(instance)) {
@@ -205,7 +223,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int)
     g_app->hwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW,
         AppWindowClassName,
-        L"Focus Strip",
+        L"IndexCard",
         WS_OVERLAPPED,
         0,
         0,

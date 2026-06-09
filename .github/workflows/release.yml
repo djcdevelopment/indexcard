@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: |
+          & "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" `
+            build\IndexCard.sln /p:Configuration=Release /t:Build /m /nologo
+        shell: pwsh
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=$($env:GITHUB_REF_NAME -replace '^v','')" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Install Inno Setup
+        run: winget install --id JRSoftware.InnoSetup --silent --accept-source-agreements --accept-package-agreements
+        shell: pwsh
+
+      - name: Update installer version
+        run: |
+          $ver = "${{ steps.version.outputs.VERSION }}"
+          (Get-Content installer\indexcard.iss) `
+            -replace '^AppVersion=.*', "AppVersion=$ver" `
+            -replace '^OutputBaseFilename=.*', "OutputBaseFilename=IndexCard-$ver-Setup" |
+          Set-Content installer\indexcard.iss
+        shell: pwsh
+
+      - name: Build installer
+        run: |
+          $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          & $iscc installer\indexcard.iss
+        shell: pwsh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/IndexCard-${{ steps.version.outputs.VERSION }}-Setup.exe
+            build/Release/IndexCard.exe
+          body: |
+            ## IndexCard ${{ steps.version.outputs.VERSION }}
+
+            A reading light for your screen — dims everything except the line you're reading.
+
+            ### Install
+            Download **IndexCard-${{ steps.version.outputs.VERSION }}-Setup.exe** and run it. No admin rights required.
+
+            ### Or run directly
+            Download **IndexCard.exe** and double-click. No install needed (self-contained, no dependencies).
+
+            ### First use
+            Press `Win+Shift+W` to draw your first reading strip.

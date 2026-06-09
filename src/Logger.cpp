@@ -16,7 +16,7 @@ std::wstring appDataDirectory()
 {
     wchar_t path[MAX_PATH] = {};
     if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, path))) {
-        return std::wstring(path) + L"\\FocusStrip";
+        return std::wstring(path) + L"\\IndexCard";
     }
     return L".\\FocusStrip";
 }
@@ -57,11 +57,11 @@ void init()
 {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_directory = appDataDirectory();
-    g_path = g_directory + L"\\focusstrip.log";
+    g_path = g_directory + L"\\indexcard.log";
     CreateDirectoryW(g_directory.c_str(), nullptr);
 
     std::ofstream file(g_path, std::ios::binary | std::ios::app);
-    file << "\n--- Focus Strip log start " << narrowAscii(timestamp()) << " ---\n";
+    file << "\n--- IndexCard log start " << narrowAscii(timestamp()) << " ---\n";
 }
 
 void write(const std::wstring& message)
@@ -69,12 +69,12 @@ void write(const std::wstring& message)
     std::lock_guard<std::mutex> lock(g_mutex);
     if (g_path.empty()) {
         g_directory = appDataDirectory();
-        g_path = g_directory + L"\\focusstrip.log";
+        g_path = g_directory + L"\\indexcard.log";
         CreateDirectoryW(g_directory.c_str(), nullptr);
     }
 
     std::wostringstream debug;
-    debug << L"[FocusStrip] " << message << L"\n";
+    debug << L"[IndexCard] " << message << L"\n";
     OutputDebugStringW(debug.str().c_str());
 
     std::ofstream file(g_path, std::ios::binary | std::ios::app);

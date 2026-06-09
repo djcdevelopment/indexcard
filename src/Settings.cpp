@@ -14,7 +14,7 @@ std::wstring appDataDirectory()
 {
     wchar_t path[MAX_PATH] = {};
     if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, path))) {
-        return std::wstring(path) + L"\\FocusStrip";
+        return std::wstring(path) + L"\\IndexCard";
     }
     return L".\\FocusStrip";
 }
@@ -119,6 +119,7 @@ void Settings::clamp()
     marginLeft = std::clamp(marginLeft, 10, 2000);
     marginRight = std::clamp(marginRight, 10, 2000);
     opacity = std::clamp(opacity, 0.15, 1.0);
+    borderWidth = std::clamp(borderWidth, 1, 8);
     sticky = false;
 }
 
@@ -148,6 +149,7 @@ Settings SettingsStore::load() const
     readInt(json, "marginLeft", settings.marginLeft);
     readInt(json, "marginRight", settings.marginRight);
     readDouble(json, "opacity", settings.opacity);
+    readInt(json, "borderWidth", settings.borderWidth);
     readBool(json, "visible", settings.visible);
     readBool(json, "sticky", settings.sticky);
     readBool(json, "selectionConfigured", settings.selectionConfigured);
@@ -179,6 +181,7 @@ bool SettingsStore::save(const Settings& settings) const
     json << "  \"marginLeft\": " << settings.marginLeft << ",\n";
     json << "  \"marginRight\": " << settings.marginRight << ",\n";
     json << "  \"opacity\": " << settings.opacity << ",\n";
+    json << "  \"borderWidth\": " << settings.borderWidth << ",\n";
     json << "  \"visible\": " << (settings.visible ? "true" : "false") << ",\n";
     json << "  \"sticky\": false,\n";
     json << "  \"selectionConfigured\": " << (settings.selectionConfigured ? "true" : "false") << "\n";

@@ -1,5 +1,6 @@
 #include "OverlayWindow.h"
 #include "Logger.h"
+#include "Theme.h"
 
 #include <algorithm>
 #include <sstream>
@@ -12,15 +13,13 @@
 
 namespace {
 
-const wchar_t* OverlayClassName = L"FocusStripOverlayWindow";
+const wchar_t* OverlayClassName = L"IndexCardOverlayWindow";
 constexpr UINT StickyTimerId = 1;
 constexpr UINT StickyReleaseMessage = WM_APP + 30;
 constexpr int StickyTimerMs = 16;
 constexpr int PillHeight = 44;
 constexpr int PillBottomPad = 10;
-constexpr int PillButtonCount = 5;
-constexpr int SlidersZoneHeight = 48;
-constexpr int HintHeight = 22;
+constexpr int PillButtonCount = 2;
 
 HWND g_stickyMouseHwnd = nullptr;
 
@@ -63,10 +62,13 @@ void registerOverlayClass(HINSTANCE instance)
     wc.lpszClassName = OverlayClassName;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     const ATOM atom = RegisterClassExW(&wc);
+    const DWORD err = GetLastError();
     std::wostringstream line;
-    line << L"Overlay RegisterClass atom=" << atom << L" lastError=" << GetLastError();
+    line << L"Overlay RegisterClass atom=" << atom << L" lastError=" << err;
     Log::write(line.str());
-    registered = true;
+    if (atom != 0 || err == ERROR_CLASS_ALREADY_EXISTS) {
+        registered = true;
+    }
 }
 
 bool insideRoundRect(int x, int y, const RECT& r, int rx, int ry)
@@ -161,30 +163,6 @@ void normalizeDibAlphaRound(void* bits, int stride, const RECT& rect, int rx, in
     }
 }
 
-void overlayText(HDC dc, const RECT& r, const wchar_t* text, int pts, bool bold, COLORREF col, UINT fmt)
-{
-    HFONT f = CreateFontW(-pts, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-    HFONT old = reinterpret_cast<HFONT>(SelectObject(dc, f));
-    SetTextColor(dc, col);
-    DrawTextW(dc, text, -1, const_cast<RECT*>(&r), fmt);
-    SelectObject(dc, old);
-    DeleteObject(f);
-}
-
-void overlayMono(HDC dc, const RECT& r, const wchar_t* text, int pts, COLORREF col)
-{
-    HFONT f = CreateFontW(-pts, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_MODERN, L"Consolas");
-    HFONT old = reinterpret_cast<HFONT>(SelectObject(dc, f));
-    SetTextColor(dc, col);
-    DrawTextW(dc, text, -1, const_cast<RECT*>(&r), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    SelectObject(dc, old);
-    DeleteObject(f);
-}
-
 } // namespace
 
 OverlayWindow::~OverlayWindow()
@@ -207,7 +185,7 @@ bool OverlayWindow::create(HINSTANCE instance, Settings settings)
     hwnd_ = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         OverlayClassName,
-        L"Focus Strip",
+        L"IndexCard",
         WS_POPUP,
         settings_.x,
         settings_.y,
@@ -228,6 +206,7 @@ bool OverlayWindow::create(HINSTANCE instance, Settings settings)
     std::wostringstream createdLine;
     createdLine << L"Overlay hwnd=0x" << std::hex << reinterpret_cast<uintptr_t>(hwnd_);
     Log::write(createdLine.str());
+    rebuildFonts();
     updateWindowSize();
     render();
     if (settings_.visible) {
@@ -243,6 +222,62 @@ void OverlayWindow::destroy()
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
+    if (dibDC_) { DeleteDC(dibDC_); dibDC_ = nullptr; }
+    if (dibBitmap_) { DeleteObject(dibBitmap_); dibBitmap_ = nullptr; }
+    dibBits_ = nullptr;
+    dibCachedW_ = dibCachedH_ = 0;
+    pixelBuf_.clear();
+
+    if (pillIconFont_) { DeleteObject(pillIconFont_); pillIconFont_ = nullptr; }
+    if (dividerPen_)   { DeleteObject(dividerPen_);   dividerPen_   = nullptr; }
+}
+
+void OverlayWindow::rebuildDib(int w, int h)
+{
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    if (dibDC_) { DeleteDC(dibDC_); dibDC_ = nullptr; }
+    if (dibBitmap_) { DeleteObject(dibBitmap_); dibBitmap_ = nullptr; }
+    dibBits_ = nullptr;
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth       = w;
+    bmi.bmiHeader.biHeight      = -h;
+    bmi.bmiHeader.biPlanes      = 1;
+    bmi.bmiHeader.biBitCount    = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    HDC screen = GetDC(nullptr);
+    dibDC_     = CreateCompatibleDC(screen);
+    dibBitmap_ = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &dibBits_, nullptr, 0);
+    ReleaseDC(nullptr, screen);
+
+    if (!dibDC_ || !dibBitmap_ || !dibBits_) {
+        if (dibBitmap_) { DeleteObject(dibBitmap_); dibBitmap_ = nullptr; }
+        if (dibDC_)     { DeleteDC(dibDC_);         dibDC_     = nullptr; }
+        dibBits_ = nullptr;
+        Log::write(L"rebuildDib: CreateDIBSection failed");
+        return;
+    }
+
+    SelectObject(dibDC_, dibBitmap_);
+    SetBkMode(dibDC_, TRANSPARENT);
+    pixelBuf_.assign(static_cast<size_t>(w) * h, 0u);
+    dibCachedW_ = w;
+    dibCachedH_ = h;
+}
+
+void OverlayWindow::rebuildFonts()
+{
+    if (pillIconFont_) { DeleteObject(pillIconFont_); }
+    if (dividerPen_)   { DeleteObject(dividerPen_);   }
+
+    pillIconFont_ = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    dividerPen_ = CreatePen(PS_SOLID, 1, RGB(38, 44, 56));
 }
 
 void OverlayWindow::show()
@@ -328,64 +363,21 @@ LRESULT OverlayWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_LBUTTONDOWN: {
         POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-        Slider slider = Slider::None;
-        const HitTarget target = hitTestClient(pt, &slider);
-        if (settings_.sticky && target == HitTarget::None) {
-            setSticky(false);
-            notifySettingsChanged();
-            return 0;
-        }
-        if (target == HitTarget::Move) {
-            draggingMove_ = true;
-            dragStart_ = pt;
-            dragWindowStart_.x = settings_.x;
-            dragWindowStart_.y = settings_.y;
-            SetCapture(hwnd_);
-        } else if (target == HitTarget::Follow) {
+        const HitTarget target = hitTestClient(pt);
+        if (target == HitTarget::Follow) {
             setSticky(!settings_.sticky);
             notifySettingsChanged();
         } else if (target == HitTarget::Redraw) {
             if (resizeRequested_) {
                 resizeRequested_();
             }
-        } else if (target == HitTarget::Tune) {
-            tuneOpen_ = !tuneOpen_;
-            render();
         } else if (target == HitTarget::Hide) {
             hide();
-        } else if (target == HitTarget::Slider && slider != Slider::None) {
-            activeSlider_ = slider;
-            updateSliderFromPoint(activeSlider_, pt.x);
-            SetCapture(hwnd_);
-        }
-        return 0;
-    }
-
-    case WM_MOUSEMOVE: {
-        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        if (draggingMove_) {
-            settings_.x = dragWindowStart_.x + (pt.x - dragStart_.x);
-            settings_.y = dragWindowStart_.y + (pt.y - dragStart_.y);
-            SetWindowPos(hwnd_, HWND_TOPMOST, settings_.x, settings_.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
-        } else if (activeSlider_ != Slider::None) {
-            updateSliderFromPoint(activeSlider_, pt.x);
         }
         return 0;
     }
 
     case WM_LBUTTONUP:
-        if (settings_.sticky && !draggingMove_ && activeSlider_ == Slider::None) {
-            POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            if (hitTestClient(pt) == HitTarget::None) {
-                setSticky(false);
-            }
-        }
-        if (draggingMove_ || activeSlider_ != Slider::None) {
-            draggingMove_ = false;
-            activeSlider_ = Slider::None;
-            ReleaseCapture();
-            notifySettingsChanged();
-        }
         return 0;
 
     case WM_TIMER:
@@ -422,173 +414,71 @@ LRESULT OverlayWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
 
 void OverlayWindow::render()
 {
-    if (!hwnd_) {
+    if (!hwnd_ || !dibBits_) {
         return;
     }
 
-    const int width = settings_.outerWidth();
-    const int height = settings_.outerHeight();
-    if (width <= 0 || height <= 0) {
-        return;
-    }
+    const int width  = dibCachedW_;
+    const int height = dibCachedH_;
 
-    // --- Pixel buffer (premultiplied ARGB) ---
-    std::vector<unsigned int> pixels(static_cast<size_t>(width) * static_cast<size_t>(height), 0);
+    std::fill(pixelBuf_.begin(), pixelBuf_.end(), 0u);
 
-    // Dimming overlay (white with opacity)
+    // Dimming overlay
     const unsigned char wa = static_cast<unsigned char>(std::clamp(settings_.opacity, 0.15, 1.0) * 255.0);
     RECT full = {0, 0, width, height};
-    fillRectArgb(pixels, width, full, wa, 255, 255, 255);
+    fillRectArgb(pixelBuf_, width, full, wa, 255, 255, 255);
 
     // Clear selection strip
     RECT sel = selectionRect();
-    fillRectArgb(pixels, width, sel, 18, 255, 255, 255);
+    fillRectArgb(pixelBuf_, width, sel, 18, 255, 255, 255);
 
-    // Teal selection border (2px, drawn directly in pixel buffer for correct alpha)
+    // Selection border
     {
-        const int bw = 2;
-        fillRectArgb(pixels, width, {sel.left, sel.top, sel.right, sel.top + bw}, 220, 94, 234, 212);
-        fillRectArgb(pixels, width, {sel.left, sel.bottom - bw, sel.right, sel.bottom}, 220, 94, 234, 212);
-        fillRectArgb(pixels, width, {sel.left, sel.top, sel.left + bw, sel.bottom}, 220, 94, 234, 212);
-        fillRectArgb(pixels, width, {sel.right - bw, sel.top, sel.right, sel.bottom}, 220, 94, 234, 212);
+        const int bw = settings_.borderWidth;
+        fillRectArgb(pixelBuf_, width, {sel.left, sel.top, sel.right, sel.top + bw},      220, Theme::AccentR, Theme::AccentG, Theme::AccentB);
+        fillRectArgb(pixelBuf_, width, {sel.left, sel.bottom - bw, sel.right, sel.bottom}, 220, Theme::AccentR, Theme::AccentG, Theme::AccentB);
+        fillRectArgb(pixelBuf_, width, {sel.left, sel.top, sel.left + bw, sel.bottom},    220, Theme::AccentR, Theme::AccentG, Theme::AccentB);
+        fillRectArgb(pixelBuf_, width, {sel.right - bw, sel.top, sel.right, sel.bottom},  220, Theme::AccentR, Theme::AccentG, Theme::AccentB);
     }
-
-    const RECT hint = {}; // hint label removed
 
     // Pill toolbar background
     const RECT pill = pillRect();
-    fillRoundRectArgb(pixels, width, pill, PillHeight / 2, PillHeight / 2, 238, 20, 24, 32);
+    fillRoundRectArgb(pixelBuf_, width, pill, PillHeight / 2, PillHeight / 2, 238, 20, 24, 32);
 
-    // Sliders zone background (when tuning)
-    const RECT sz = tuneOpen_ ? slidersZoneRect() : RECT{};
-    if (tuneOpen_) {
-        fillRoundRectArgb(pixels, width, sz, 8, 8, 232, 22, 27, 36);
-    }
+    memcpy(dibBits_, pixelBuf_.data(), pixelBuf_.size() * sizeof(unsigned int));
 
-    // --- GDI drawing into DIB ---
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = nullptr;
-    HDC screen = GetDC(nullptr);
-    HDC mem = CreateCompatibleDC(screen);
-    HBITMAP bitmap = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!bitmap || !bits) {
-        if (bitmap) {
-            DeleteObject(bitmap);
-        }
-        DeleteDC(mem);
-        ReleaseDC(nullptr, screen);
-        return;
-    }
-    memcpy(bits, pixels.data(), pixels.size() * sizeof(unsigned int));
-    HBITMAP oldBitmap = reinterpret_cast<HBITMAP>(SelectObject(mem, bitmap));
-    SetBkMode(mem, TRANSPARENT);
-
-    // Pill: button dividers
+    // Pill: divider between the two buttons
     {
-        HPEN divPen = CreatePen(PS_SOLID, 1, RGB(38, 44, 56));
-        HPEN oldPen = reinterpret_cast<HPEN>(SelectObject(mem, divPen));
-        const int bw = (pill.right - pill.left) / PillButtonCount;
-        for (int i = 1; i < PillButtonCount; ++i) {
-            const int x = pill.left + i * bw;
-            MoveToEx(mem, x, pill.top + 8, nullptr);
-            LineTo(mem, x, pill.bottom - 8);
-        }
-        SelectObject(mem, oldPen);
-        DeleteObject(divPen);
+        HPEN oldPen = reinterpret_cast<HPEN>(SelectObject(dibDC_, dividerPen_));
+        const int x = pill.left + (pill.right - pill.left) / PillButtonCount;
+        MoveToEx(dibDC_, x, pill.top + 8, nullptr);
+        LineTo(dibDC_, x, pill.bottom - 8);
+        SelectObject(dibDC_, oldPen);
     }
 
-    // Pill: icon-only buttons (larger icons \u2014 no label text competing)
+    // Pill: \u25A1 (redraw) and \u2715 (hide)
     {
-        struct BtnDef {
-            const wchar_t* icon;
-            bool active;
-        };
-        const BtnDef btns[PillButtonCount] = {
-            {L"\u2630", false},            // \u2630  Move
-            {L"\u25CE", settings_.sticky}, // \u25CE  Follow
-            {L"\u2196", false},            // \u2196  Redraw
-            {L"\u2261", tuneOpen_},        // \u2261  Tune
-            {L"\u2715", false},            // \u2715  Hide
-        };
+        const wchar_t* icons[PillButtonCount] = {L"\u25A1", L"\u2715"};
+        HFONT oldFont = reinterpret_cast<HFONT>(SelectObject(dibDC_, pillIconFont_));
+        SetTextColor(dibDC_, RGB(148, 160, 178));
         for (int i = 0; i < PillButtonCount; ++i) {
             const RECT br = pillButtonRect(i);
-            const COLORREF col = btns[i].active ? RGB(94, 234, 212) : RGB(148, 160, 178);
-            overlayText(mem, br, btns[i].icon, 16, false, col,
-                        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            DrawTextW(dibDC_, icons[i], -1, const_cast<RECT*>(&br), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
+        SelectObject(dibDC_, oldFont);
     }
 
-    // Sliders (when tuning)
-    if (tuneOpen_) {
-        const struct {
-            Slider id;
-            const wchar_t* label;
-        } sliderDefs[] = {
-            {Slider::VerticalMargin,   L"V-Margin"},
-            {Slider::HorizontalMargin, L"H-Margin"},
-            {Slider::Opacity,          L"Opacity"},
-            {Slider::SelectionHeight,  L"Height"},
-            {Slider::SelectionWidth,   L"Width"},
-        };
-        for (const auto& sd : sliderDefs) {
-            RECT track = sliderTrackRect(sd.id);
-            RECT labelR = {track.left, sz.top + 4, track.right, sz.top + 16};
-            overlayText(mem, labelR, sd.label, 7, false, RGB(80, 92, 108),
-                        DT_CENTER | DT_SINGLELINE);
-
-            // Track line
-            HPEN trackPen = CreatePen(PS_SOLID, 2, RGB(44, 52, 66));
-            HPEN oldPen = reinterpret_cast<HPEN>(SelectObject(mem, trackPen));
-            const int midY = track.top + heightOf(track) / 2;
-            MoveToEx(mem, track.left, midY, nullptr);
-            LineTo(mem, track.right, midY);
-            SelectObject(mem, oldPen);
-            DeleteObject(trackPen);
-
-            // Knob
-            double t = 0.0;
-            switch (sd.id) {
-            case Slider::VerticalMargin:   t = (settings_.marginTop - 20)       / 480.0; break;
-            case Slider::HorizontalMargin: t = (settings_.marginLeft - 10)      / 290.0; break;
-            case Slider::Opacity:          t = (settings_.opacity - 0.15)       / 0.85;  break;
-            case Slider::SelectionHeight:  t = (settings_.selectionHeight - 10) / 190.0; break;
-            case Slider::SelectionWidth:   t = (settings_.selectionWidth - 100) / 1900.0; break;
-            default: break;
-            }
-            t = std::clamp(t, 0.0, 1.0);
-            const int kx = track.left + static_cast<int>(std::round(t * widthOf(track)));
-            RECT knob = {kx - 4, track.top, kx + 4, track.bottom};
-            HBRUSH knobBr = CreateSolidBrush(RGB(94, 234, 212));
-            FillRect(mem, &knob, knobBr);
-            DeleteObject(knobBr);
-        }
-    }
-
-    // Fix alpha for rounded-corner regions
-    normalizeDibAlphaRound(bits, width, pill, PillHeight / 2, PillHeight / 2, 238);
-    if (tuneOpen_) {
-        normalizeDibAlphaRound(bits, width, sz, 8, 8, 232);
-    }
+    normalizeDibAlphaRound(dibBits_, width, pill, PillHeight / 2, PillHeight / 2, 238);
 
     POINT src = {0, 0};
     POINT dst = {settings_.x, settings_.y};
-    SIZE size = {width, height};
+    SIZE  size = {width, height};
     BLENDFUNCTION blend = {};
-    blend.BlendOp = AC_SRC_OVER;
+    blend.BlendOp             = AC_SRC_OVER;
     blend.SourceConstantAlpha = 255;
-    blend.AlphaFormat = AC_SRC_ALPHA;
-    UpdateLayeredWindow(hwnd_, screen, &dst, &size, mem, &src, 0, &blend, ULW_ALPHA);
-
-    SelectObject(mem, oldBitmap);
-    DeleteObject(bitmap);
-    DeleteDC(mem);
+    blend.AlphaFormat         = AC_SRC_ALPHA;
+    HDC screen = GetDC(nullptr);
+    UpdateLayeredWindow(hwnd_, screen, &dst, &size, dibDC_, &src, 0, &blend, ULW_ALPHA);
     ReleaseDC(nullptr, screen);
 }
 
@@ -598,7 +488,12 @@ void OverlayWindow::updateWindowSize()
         return;
     }
     settings_.clamp();
-    SetWindowPos(hwnd_, HWND_TOPMOST, settings_.x, settings_.y, settings_.outerWidth(), settings_.outerHeight(), SWP_NOACTIVATE | (visible_ ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+    const int w = settings_.outerWidth();
+    const int h = settings_.outerHeight();
+    if (w != dibCachedW_ || h != dibCachedH_) {
+        rebuildDib(w, h);
+    }
+    SetWindowPos(hwnd_, HWND_TOPMOST, settings_.x, settings_.y, w, h, SWP_NOACTIVATE | (visible_ ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
 }
 
 void OverlayWindow::notifySettingsChanged()
@@ -736,115 +631,18 @@ RECT OverlayWindow::pillButtonRect(int index) const
     return {p.left + index * bw, p.top, p.left + (index + 1) * bw, p.bottom};
 }
 
-RECT OverlayWindow::hintLabelRect() const
+OverlayWindow::HitTarget OverlayWindow::hitTestClient(POINT pt) const
 {
-    const int w = settings_.outerWidth();
-    const int hw = std::min(420, w - 32);
-    return {(w - hw) / 2, 6, (w - hw) / 2 + hw, 6 + HintHeight};
-}
-
-RECT OverlayWindow::slidersZoneRect() const
-{
-    const RECT p = pillRect();
-    return {p.left, p.top - 6 - SlidersZoneHeight, p.right, p.top - 6};
-}
-
-RECT OverlayWindow::sliderTrackRect(Slider slider) const
-{
-    const RECT zone = slidersZoneRect();
-    const int gap = 10;
-    const int count = 5;
-    const int tw = std::max(40, (widthOf(zone) - (count - 1) * gap) / count);
-    int index = 0;
-    switch (slider) {
-    case Slider::VerticalMargin:   index = 0; break;
-    case Slider::HorizontalMargin: index = 1; break;
-    case Slider::Opacity:          index = 2; break;
-    case Slider::SelectionHeight:  index = 3; break;
-    case Slider::SelectionWidth:   index = 4; break;
-    default: return {};
-    }
-    const int x = zone.left + index * (tw + gap);
-    const int y = zone.top + 18;
-    return {x, y, x + tw, y + 12};
-}
-
-OverlayWindow::HitTarget OverlayWindow::hitTestClient(POINT pt, Slider* slider) const
-{
-    if (slider) {
-        *slider = Slider::None;
-    }
-
     if (settings_.sticky) {
         return HitTarget::Follow;
     }
 
-    // Check pill buttons
     const RECT pill = pillRect();
     if (contains(pill, pt)) {
         const int bw = (pill.right - pill.left) / PillButtonCount;
-        const int idx = (pt.x - pill.left) / std::max(1, bw);
-        switch (std::clamp(idx, 0, PillButtonCount - 1)) {
-        case 0: return HitTarget::Move;
-        case 1: return HitTarget::Follow;
-        case 2: return HitTarget::Redraw;
-        case 3: return HitTarget::Tune;
-        case 4: return HitTarget::Hide;
-        }
+        const int idx = std::clamp(static_cast<int>(pt.x - pill.left) / std::max(1, bw), 0, PillButtonCount - 1);
+        return idx == 0 ? HitTarget::Redraw : HitTarget::Hide;
     }
 
-    // Check sliders (only when tune panel is open)
-    if (tuneOpen_) {
-        const Slider sliders[] = {
-            Slider::VerticalMargin,
-            Slider::HorizontalMargin,
-            Slider::Opacity,
-            Slider::SelectionHeight,
-            Slider::SelectionWidth,
-        };
-        for (Slider item : sliders) {
-            RECT r = sliderTrackRect(item);
-            InflateRect(&r, 8, 12);
-            if (contains(r, pt)) {
-                if (slider) {
-                    *slider = item;
-                }
-                return HitTarget::Slider;
-            }
-        }
-    }
-
-    if (!contains(selectionRect(), pt)) {
-        return HitTarget::Follow;
-    }
-    return HitTarget::None;
-}
-
-void OverlayWindow::updateSliderFromPoint(Slider slider, int x)
-{
-    RECT track = sliderTrackRect(slider);
-    const double t = std::clamp((x - track.left) / static_cast<double>(std::max(1, widthOf(track))), 0.0, 1.0);
-    switch (slider) {
-    case Slider::VerticalMargin:
-        settings_.marginTop = settings_.marginBottom = 20 + static_cast<int>(std::round(t * 480.0));
-        break;
-    case Slider::HorizontalMargin:
-        settings_.marginLeft = settings_.marginRight = 10 + static_cast<int>(std::round(t * 290.0));
-        break;
-    case Slider::Opacity:
-        settings_.opacity = 0.15 + t * 0.85;
-        break;
-    case Slider::SelectionHeight:
-        settings_.selectionHeight = 10 + static_cast<int>(std::round(t * 190.0));
-        break;
-    case Slider::SelectionWidth:
-        settings_.selectionWidth = 100 + static_cast<int>(std::round(t * 1900.0));
-        break;
-    default:
-        break;
-    }
-    settings_.clamp();
-    updateWindowSize();
-    render();
-    notifySettingsChanged();
+    return contains(selectionRect(), pt) ? HitTarget::None : HitTarget::Follow;
 }

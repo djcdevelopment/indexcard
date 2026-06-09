@@ -3,6 +3,7 @@
 #include "Settings.h"
 
 #include <functional>
+#include <vector>
 #include <windows.h>
 
 class OverlayWindow {
@@ -34,27 +35,17 @@ public:
 private:
     enum class HitTarget {
         None,
-        Move,
         Follow,
         Redraw,
-        Tune,
         Hide,
-        Slider
-    };
-
-    enum class Slider {
-        None,
-        VerticalMargin,
-        HorizontalMargin,
-        Opacity,
-        SelectionHeight,
-        SelectionWidth
     };
 
     LRESULT handleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
     void render();
     void updateWindowSize();
+    void rebuildDib(int w, int h);
+    void rebuildFonts();
     void notifySettingsChanged();
     void notifyVisibilityChanged();
     void setSticky(bool enabled);
@@ -67,26 +58,29 @@ private:
     RECT selectionRect() const;
     RECT pillRect() const;
     RECT pillButtonRect(int index) const;
-    RECT hintLabelRect() const;
-    RECT slidersZoneRect() const;
-    RECT sliderTrackRect(Slider slider) const;
-    HitTarget hitTestClient(POINT pt, Slider* slider = nullptr) const;
-    void updateSliderFromPoint(Slider slider, int x);
+    HitTarget hitTestClient(POINT pt) const;
 
     HWND hwnd_ = nullptr;
     HINSTANCE instance_ = nullptr;
     Settings settings_;
     bool visible_ = false;
-    bool draggingMove_ = false;
-    POINT dragStart_ = {};
-    POINT dragWindowStart_ = {};
-    Slider activeSlider_ = Slider::None;
-    bool tuneOpen_ = false;
     bool keyUpDown_ = false;
     bool keyDownDown_ = false;
     bool keyLeftDown_ = false;
     bool keyRightDown_ = false;
     HHOOK stickyMouseHook_ = nullptr;
+
+    // DIB cache — rebuilt only when window dimensions change
+    std::vector<unsigned int> pixelBuf_;
+    HDC     dibDC_      = nullptr;
+    HBITMAP dibBitmap_  = nullptr;
+    void*   dibBits_    = nullptr;
+    int     dibCachedW_ = 0;
+    int     dibCachedH_ = 0;
+
+    // GDI object cache — created once, reused every frame
+    HFONT pillIconFont_ = nullptr;
+    HPEN  dividerPen_   = nullptr;
 
     SettingsCallback settingsChanged_;
     SettingsCallback visibilityChanged_;

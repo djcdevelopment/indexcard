@@ -1,9 +1,10 @@
 #include "SplashWindow.h"
+#include "Theme.h"
 #include <windowsx.h>
 
 namespace {
 
-const wchar_t* SplashClassName = L"FocusStripSplash";
+const wchar_t* SplashClassName = L"IndexCardSplash";
 bool g_splashRegistered = false;
 
 void registerSplashClass(HINSTANCE instance)
@@ -49,7 +50,7 @@ bool SplashWindow::create(HINSTANCE instance)
     hwnd_ = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         SplashClassName,
-        L"Reader",
+        L"IndexCard",
         WS_POPUP,
         wx, wy, W, H,
         nullptr, nullptr, instance_, this);
@@ -211,14 +212,14 @@ void SplashWindow::paint(HDC dc)
         const int ih = s(72);
         const int ix = (W - iw) / 2;
         const int iy = s(28);
-        splashRR(dc, ix, iy, iw, ih, s(18), RGB(16, 38, 36), RGB(94, 234, 212), s(2));
+        splashRR(dc, ix, iy, iw, ih, s(18), RGB(16, 38, 36), Theme::Accent, s(2));
         // strip inside
-        splashRR(dc, ix + s(14), iy + s(29), s(44), s(14), s(4), RGB(94, 234, 212));
+        splashRR(dc, ix + s(14), iy + s(29), s(44), s(14), s(4), Theme::Accent);
     }
 
     // "READER · RUNNING IN TRAY"
     splashText(dc, pad, s(116), cw, s(18),
-               L"READER  ·  RUNNING IN TRAY",
+               L"INDEXCARD  ·  RUNNING IN TRAY",
                s(9), false, RGB(88, 100, 118),
                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
@@ -276,7 +277,7 @@ void SplashWindow::paint(HDC dc)
         const int  bfps = s(12);
 
         splashRR(dc, dr.left, dr.top, dr.right - dr.left, dr.bottom - dr.top,
-                 s(10), RGB(94, 234, 212));
+                 s(10), Theme::Accent);
         splashText(dc, dr.left, dr.top, dr.right - dr.left, dr.bottom - dr.top,
                    L"Draw a reading strip", bfps, true, RGB(12, 18, 26),
                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);

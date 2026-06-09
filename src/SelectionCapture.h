@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <vector>
 #include <windows.h>
 
 class SelectionCapture {
@@ -24,6 +25,8 @@ private:
     void drawToolbar(HDC dc, int width);
     RECT virtualScreen() const;
     RECT normalizedSelection() const;
+    void rebuildDib(int w, int h);
+    void releaseDib();
 
     HWND hwnd_ = nullptr;
     HINSTANCE instance_ = nullptr;
@@ -32,4 +35,18 @@ private:
     POINT start_ = {};
     POINT current_ = {};
     bool drawing_ = false;
+
+    // DIB cache — alive for the duration of one capture session
+    std::vector<unsigned int> pixelBuf_;
+    HDC     dibDC_     = nullptr;
+    HBITMAP dibBitmap_ = nullptr;
+    void*   dibBits_   = nullptr;
+
+    // GDI object cache for drawToolbar
+    HBRUSH toolbarFillBrush_     = nullptr;
+    HBRUSH toolbarSelectedBrush_ = nullptr;
+    HPEN   toolbarOutlinePen_    = nullptr;
+    HFONT  toolbarTitleFont_     = nullptr;
+    HFONT  toolbarSmallFont_     = nullptr;
+    HPEN   selectionBorderPen_   = nullptr;
 };

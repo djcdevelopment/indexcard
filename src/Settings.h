@@ -12,6 +12,7 @@ struct Settings {
     int marginLeft = 75;
     int marginRight = 75;
     double opacity = 0.90;
+    int borderWidth = 2;
     bool visible = false;
     bool sticky = false;
     bool selectionConfigured = false;
