@@ -6,11 +6,10 @@ A reading light for your screen. Dims everything except the line you're on — a
 
 ## Install
 
-Download the latest **IndexCard-1.0-Setup.exe** from [Releases](https://github.com/djcdevelopment/indexcard/releases) and run it. No admin rights required.
-
-Or download the bare **IndexCard.exe** and double-click — no installer, no dependencies.
-
-> **Windows security prompt:** Because IndexCard is not yet code-signed, Windows SmartScreen will block it on first run. Click **More info → Run anyway** to proceed. This is expected until a signing certificate is in place.
+> **No releases published yet.** Build from source (see below) until v1.0 ships.
+> Once a release is available: download **IndexCard-1.0-Setup.exe** from [Releases](https://github.com/djcdevelopment/indexcard/releases) and run it. No admin rights required.
+>
+> **Windows security prompt:** IndexCard is not yet code-signed. Windows SmartScreen will block it on first run — click **More info → Run anyway** to proceed. A signed build is planned for the first public release.
 
 ## Use
 
