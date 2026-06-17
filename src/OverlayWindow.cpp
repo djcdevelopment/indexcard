@@ -400,18 +400,6 @@ LRESULT OverlayWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case WM_LBUTTONUP:
         return 0;
 
-    case WM_MOUSEWHEEL:
-    case WM_MOUSEHWHEEL: {
-        // Never eat scroll: forward the wheel to whatever sits directly beneath
-        // the overlay so the reading surface scrolls while the card follows the
-        // mouse. Wheel lParam is already in screen coordinates.
-        POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-        if (HWND below = windowBelow(pt)) {
-            PostMessageW(below, message, wParam, lParam);
-        }
-        return 0;
-    }
-
     case WM_TIMER:
         if (wParam == StickyTimerId) {
             updateStickyTracking();
@@ -595,17 +583,6 @@ void OverlayWindow::updateStickyTracking()
     settings_.x = cursor.x - grabOffsetX_;
     settings_.y = cursor.y - grabOffsetY_;
     SetWindowPos(hwnd_, HWND_TOPMOST, settings_.x, settings_.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
-}
-
-HWND OverlayWindow::windowBelow(POINT screenPt)
-{
-    // Temporarily disable the overlay so WindowFromPoint skips it and returns
-    // the window underneath — including the nested child actually under the
-    // cursor, which is what should receive the forwarded scroll.
-    EnableWindow(hwnd_, FALSE);
-    HWND below = WindowFromPoint(screenPt);
-    EnableWindow(hwnd_, TRUE);
-    return below == hwnd_ ? nullptr : below;
 }
 
 RECT OverlayWindow::selectionRect() const

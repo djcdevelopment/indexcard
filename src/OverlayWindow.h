@@ -52,7 +52,6 @@ private:
     void installStickyMouseHook();
     void uninstallStickyMouseHook();
     void updateStickyTracking();
-    HWND windowBelow(POINT screenPt);
 
     RECT selectionRect() const;
     RECT pillRect() const;
