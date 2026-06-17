@@ -1,6 +1,6 @@
 # ADR-0004: Two-button pill toolbar; follow mode via gesture, not button
 
-**Status:** Accepted
+**Status:** Accepted (follow-gesture behavior and `□` label refined by ADR-0006, 2026-06-17)
 **Date:** 2026-06-09
 
 ## Context
