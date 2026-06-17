@@ -20,6 +20,9 @@ constexpr int StickyTimerMs = 16;
 constexpr int PillHeight = 44;
 constexpr int PillBottomPad = 10;
 constexpr int PillButtonCount = 2;
+// How far inside the strip edges still counts as the grabbable border, so the
+// thin accent outline is actually easy to click as a follow-mode handle.
+constexpr int GrabBand = 6;
 
 HWND g_stickyMouseHwnd = nullptr;
 
@@ -27,7 +30,18 @@ LRESULT CALLBACK StickyMouseProc(int code, WPARAM wParam, LPARAM lParam)
 {
     if (code == HC_ACTION && g_stickyMouseHwnd) {
         switch (wParam) {
-        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDOWN: {
+            // A left-click on the overlay is the detach toggle, handled by the
+            // window's own WM_LBUTTONDOWN. Suppress the hook release there so
+            // the one click isn't processed twice (release, then re-grab).
+            const auto* ms = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
+            RECT wr = {};
+            if (ms && GetWindowRect(g_stickyMouseHwnd, &wr) && PtInRect(&wr, ms->pt)) {
+                break;
+            }
+            PostMessageW(g_stickyMouseHwnd, StickyReleaseMessage, 0, 0);
+            break;
+        }
         case WM_RBUTTONDOWN:
         case WM_MBUTTONDOWN:
         case WM_XBUTTONDOWN:
@@ -365,6 +379,12 @@ LRESULT OverlayWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         const HitTarget target = hitTestClient(pt);
         if (target == HitTarget::Follow) {
+            if (!settings_.sticky) {
+                // Anchor follow mode to the exact point grabbed so it stays
+                // under the cursor, rather than snapping to the corner.
+                grabOffsetX_ = pt.x;
+                grabOffsetY_ = pt.y;
+            }
             setSticky(!settings_.sticky);
             notifySettingsChanged();
         } else if (target == HitTarget::Redraw) {
@@ -380,10 +400,21 @@ LRESULT OverlayWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case WM_LBUTTONUP:
         return 0;
 
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL: {
+        // Never eat scroll: forward the wheel to whatever sits directly beneath
+        // the overlay so the reading surface scrolls while the card follows the
+        // mouse. Wheel lParam is already in screen coordinates.
+        POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        if (HWND below = windowBelow(pt)) {
+            PostMessageW(below, message, wParam, lParam);
+        }
+        return 0;
+    }
+
     case WM_TIMER:
         if (wParam == StickyTimerId) {
             updateStickyTracking();
-            processStickyKeys();
             return 0;
         }
         break;
@@ -523,7 +554,6 @@ void OverlayWindow::setSticky(bool enabled)
     } else {
         KillTimer(hwnd_, StickyTimerId);
         uninstallStickyMouseHook();
-        keyUpDown_ = keyDownDown_ = keyLeftDown_ = keyRightDown_ = false;
     }
     render();
 }
@@ -562,48 +592,20 @@ void OverlayWindow::updateStickyTracking()
     }
     POINT cursor = {};
     GetCursorPos(&cursor);
-    settings_.x = cursor.x - settings_.outerWidth();
-    settings_.y = cursor.y - settings_.outerHeight();
+    settings_.x = cursor.x - grabOffsetX_;
+    settings_.y = cursor.y - grabOffsetY_;
     SetWindowPos(hwnd_, HWND_TOPMOST, settings_.x, settings_.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
-void OverlayWindow::processStickyKeys()
+HWND OverlayWindow::windowBelow(POINT screenPt)
 {
-    if (!settings_.sticky) {
-        return;
-    }
-
-    const bool up = (GetAsyncKeyState(VK_UP) & 0x8000) != 0;
-    const bool down = (GetAsyncKeyState(VK_DOWN) & 0x8000) != 0;
-    const bool left = (GetAsyncKeyState(VK_LEFT) & 0x8000) != 0;
-    const bool right = (GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0;
-
-    if (up && !keyUpDown_) {
-        resizeSelection(0, -10);
-    }
-    if (down && !keyDownDown_) {
-        resizeSelection(0, 10);
-    }
-    if (left && !keyLeftDown_) {
-        resizeSelection(-50, 0);
-    }
-    if (right && !keyRightDown_) {
-        resizeSelection(50, 0);
-    }
-
-    keyUpDown_ = up;
-    keyDownDown_ = down;
-    keyLeftDown_ = left;
-    keyRightDown_ = right;
-}
-
-void OverlayWindow::resizeSelection(int deltaWidth, int deltaHeight)
-{
-    settings_.selectionWidth = std::max(100, settings_.selectionWidth + deltaWidth);
-    settings_.selectionHeight = std::max(10, settings_.selectionHeight + deltaHeight);
-    updateWindowSize();
-    render();
-    notifySettingsChanged();
+    // Temporarily disable the overlay so WindowFromPoint skips it and returns
+    // the window underneath — including the nested child actually under the
+    // cursor, which is what should receive the forwarded scroll.
+    EnableWindow(hwnd_, FALSE);
+    HWND below = WindowFromPoint(screenPt);
+    EnableWindow(hwnd_, TRUE);
+    return below == hwnd_ ? nullptr : below;
 }
 
 RECT OverlayWindow::selectionRect() const
@@ -644,5 +646,15 @@ OverlayWindow::HitTarget OverlayWindow::hitTestClient(POINT pt) const
         return idx == 0 ? HitTarget::Redraw : HitTarget::Hide;
     }
 
-    return contains(selectionRect(), pt) ? HitTarget::None : HitTarget::Follow;
+    const RECT sel = selectionRect();
+    if (contains(sel, pt)) {
+        // The accent border is a follow-mode grab handle; the clear interior
+        // stays transparent so clicks pass through to the app being read.
+        const int grab = std::max(settings_.borderWidth, GrabBand);
+        const bool onBorder = pt.x < sel.left + grab || pt.x >= sel.right - grab ||
+                              pt.y < sel.top + grab  || pt.y >= sel.bottom - grab;
+        return onBorder ? HitTarget::Follow : HitTarget::None;
+    }
+
+    return HitTarget::Follow;
 }

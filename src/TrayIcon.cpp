@@ -55,7 +55,7 @@ void TrayIcon::showMenu()
 
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, CmdShowHide, visible_ ? L"Hide" : L"Show");
-    AppendMenuW(menu, MF_STRING, CmdResize, L"Resize Selection");
+    AppendMenuW(menu, MF_STRING, CmdResize, L"Redraw");
     AppendMenuW(menu, MF_STRING, CmdReset, L"Reset Defaults");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CmdQuit, L"Quit");

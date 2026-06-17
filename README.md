@@ -14,12 +14,13 @@ A reading light for your screen. Dims everything except the line you're on — a
 ## Use
 
 - `Win+Shift+W` — toggle the overlay on/off. First press opens a selection screen: drag to draw your reading strip.
-- Click the **dimmed overlay area** to enter follow mode (strip tracks your cursor vertically as you read). Click again to exit follow mode.
+- Click the **dimmed overlay area** or the **strip border** to enter follow mode. The strip stays anchored to the exact point you clicked and rides along with your cursor as you read. Click again (anywhere on the overlay) to drop it in place.
+- While following, the **mouse wheel passes through** to the page underneath, so you can scroll your reading surface without leaving follow mode.
 - Bottom-right pill:
-  - `□` — redraw / resize the strip
+  - `□` — redraw the strip (drag a new one)
   - `✕` — hide the overlay
 - Tray icon (right-click):
-  - Show/Hide, Resize Selection, Reset Defaults, Quit
+  - Show/Hide, Redraw, Reset Defaults, Quit
 
 ### Settings
 

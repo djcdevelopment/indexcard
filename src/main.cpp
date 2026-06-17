@@ -143,7 +143,7 @@ LRESULT CALLBACK AppWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             handleToggleHotkey();
             return 0;
         case TrayIcon::CmdResize:
-            Log::write(L"Tray command Resize Selection");
+            Log::write(L"Tray command Redraw");
             beginCapture();
             return 0;
         case TrayIcon::CmdReset:

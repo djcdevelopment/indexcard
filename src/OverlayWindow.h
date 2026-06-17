@@ -52,8 +52,7 @@ private:
     void installStickyMouseHook();
     void uninstallStickyMouseHook();
     void updateStickyTracking();
-    void processStickyKeys();
-    void resizeSelection(int deltaWidth, int deltaHeight);
+    HWND windowBelow(POINT screenPt);
 
     RECT selectionRect() const;
     RECT pillRect() const;
@@ -64,11 +63,13 @@ private:
     HINSTANCE instance_ = nullptr;
     Settings settings_;
     bool visible_ = false;
-    bool keyUpDown_ = false;
-    bool keyDownDown_ = false;
-    bool keyLeftDown_ = false;
-    bool keyRightDown_ = false;
     HHOOK stickyMouseHook_ = nullptr;
+
+    // Where the cursor sat, in window-client coords, when follow mode was
+    // engaged. Tracking keeps this exact point under the cursor instead of
+    // snapping the overlay's corner to it.
+    int grabOffsetX_ = 0;
+    int grabOffsetY_ = 0;
 
     // DIB cache — rebuilt only when window dimensions change
     std::vector<unsigned int> pixelBuf_;
